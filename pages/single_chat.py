@@ -5,8 +5,33 @@ import sqlite3
 from datetime import datetime
 import random
 import string
+import os
+
+def get_user_info(username):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT nickname, role, avatar_path FROM users WHERE username = ?", (username,))
+    result = c.fetchone()
+    conn.close()
+    return {
+        "nickname": result[0],
+        "role": result[1],
+        "avatar": result[2]
+    } if result else None
 
 
+
+def generate_unique_invite_code():
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    while True:
+        invite_code = ''.join(random.choices(
+            string.ascii_uppercase + string.digits, k=6
+        ))
+        c.execute("SELECT id FROM group_chats WHERE invite_code = ?", (invite_code,))
+        if not c.fetchone():
+            conn.close()
+            return invite_code
 
 # 数据库初始化函数
 def init_chat_db():
@@ -263,12 +288,46 @@ with st.sidebar:
     else:
         # 显示右侧边栏内容
         st.header("用户信息")
-        nickname = get_user_nickname(st.session_state.username)
-        if nickname:
-            st.subheader(f"昵称: {nickname}")
 
-        # 在侧边栏的群聊管理部分修改如下代码：
+        # 在用户信息显示部分修改
+        st.markdown("""
+        <style>
+            .user-card {
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                padding: 15px;
+                background: #f8f9fa;
+                border-radius: 10px;
+                margin-bottom: 20px;
+            }
+            .avatar {
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                object-fit: cover;
+            }
+            .user-info {
+                flex: 1;
+            }
+        </style>
+        """, unsafe_allow_html=True)
 
+        user_info = get_user_info(st.session_state.username)
+        if user_info:
+            avatar_path = os.path.join(os.getcwd(), user_info['avatar'])
+            st.markdown(f"""
+            <div class="user-card">
+                <img src="{avatar_path}" class="avatar">
+                <div class="user-info">
+                    <h3 style="margin:0;font-size:18px">{user_info['nickname']}</h3>
+                    <p style="margin:0;color:#666">{user_info['role']}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+        # 在侧边栏的群聊管理部分
         st.header("群聊管理")
 
         # 初始化表单显示状态
@@ -302,10 +361,8 @@ with st.sidebar:
                     if len(group_name) > 20:
                         st.error("群聊名称不能超过20个字符")
                     else:
-                        # 生成随机邀请码
-                        invite_code = ''.join(random.choices(
-                            string.ascii_uppercase + string.digits, k=6
-                        ))
+                        # 生成唯一邀请码
+                        invite_code = generate_unique_invite_code()
 
                         conn = sqlite3.connect('users.db')
                         c = conn.cursor()
@@ -376,18 +433,38 @@ with st.sidebar:
         if st.button("加入群聊"):
             conn = sqlite3.connect('users.db')
             c = conn.cursor()
-            c.execute("SELECT id FROM group_chats WHERE invite_code = ?", (invite_code,))
-            result = c.fetchone()
-            if result:
-                group_chat_id = result[0]
-                c.execute("INSERT OR IGNORE INTO user_group_chats (user_id, group_chat_id) VALUES (?, ?)",
-                            (st.session_state.username, group_chat_id))
-                conn.commit()
+            try:
+                c.execute("SELECT id FROM group_chats WHERE invite_code = ?", (invite_code,))
+                result = c.fetchone()
+                if result:
+                    group_chat_id = result[0]
+                    # 检查是否已加入
+                    c.execute("SELECT 1 FROM user_group_chats WHERE user_id = ? AND group_chat_id = ?",
+                              (st.session_state.username, group_chat_id))
+                    if not c.fetchone():
+                        c.execute("INSERT INTO user_group_chats (user_id, group_chat_id) VALUES (?, ?)",
+                                  (st.session_state.username, group_chat_id))
+                        conn.commit()
+                        st.success("成功加入群聊")
+                    else:
+                        st.warning("您已在群聊中")
+
+                    # 更新群聊状态
+                    c.execute("SELECT title, invite_code FROM group_chats WHERE id = ?", (group_chat_id,))
+                    group_info = c.fetchone()
+
+                    st.session_state.current_group = {
+                        "id": group_chat_id,
+                        "name": group_info[0],
+                        "invite_code": group_info[1]
+                    }
+                    st.experimental_rerun()
+                else:
+                    st.error("邀请码无效")
+            except sqlite3.IntegrityError:
+                st.error("操作失败：邀请码已失效")
+            finally:
                 conn.close()
-                st.success("加入群聊成功")
-            else:
-                conn.close()
-                st.error("邀请码无效")
 
         # 修改后的按钮布局
         st.markdown("---")
@@ -413,8 +490,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-
 
 
 
@@ -477,7 +552,7 @@ if prompt := st.chat_input("请输入您的问题..."):
 
             # 发送流式请求
             with requests.post(
-                    "http://127.0.0.1:7861/chat/knowledge_base_chat",
+                    "http://127.0.0.1:6006/chat/knowledge_base_chat",
                     json=payload,
                     stream=True
             ) as response:

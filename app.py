@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 from passlib.hash import pbkdf2_sha256
 import re
-
+import os
 
 # 初始化数据库
 def init_db():
@@ -10,10 +10,11 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (username TEXT PRIMARY KEY, 
-                  nickname TEXT NOT NULL,  -- 确保存在该字段
+                  nickname TEXT NOT NULL,
                   phone TEXT UNIQUE NOT NULL,
                   password TEXT NOT NULL,
-                  role TEXT NOT NULL)''')
+                  role TEXT NOT NULL,
+                  avatar_path TEXT NOT NULL DEFAULT 'default_avatar.png')''')  # 确保包含这个字段
     conn.commit()
     conn.close()
 
@@ -31,7 +32,7 @@ def verify_user(username, password):
 
 
 # 注册新用户
-def register_user(username, nickname, phone, password, role):
+def register_user(username, nickname, phone, password, role, avatar_path='default_avatar.png'):
     try:
         # 验证手机号格式
         if not re.match(r'^1[3-9]\d{9}$', phone):
@@ -40,8 +41,8 @@ def register_user(username, nickname, phone, password, role):
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
         hashed = pbkdf2_sha256.hash(password)
-        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?)",
-                  (username, nickname, phone, hashed, role))
+        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)",
+                  (username, nickname, phone, hashed, role, avatar_path))
         conn.commit()
         conn.close()
         return "success"
@@ -98,6 +99,7 @@ with tab1:
 
 with tab2:
     with st.form("注册表单"):
+        reg_avatar = st.file_uploader("上传头像", type=["png", "jpg", "jpeg"])
         reg_nickname = st.text_input("昵称")  # 新增昵称字段
         reg_user = st.text_input("用户名（用于登录）")
         reg_phone = st.text_input("手机号")
@@ -109,6 +111,14 @@ with tab2:
         if reg_submitted:
             # 前端验证
             error_messages = []
+            avatar_path = 'default_avatar.png'
+            if reg_avatar is not None:
+                # 修正路径写法（去掉开头的斜杠）
+                avatar_path = f"avatars/{reg_user}_avatar.{reg_avatar.type.split('/')[-1]}"  # ← 主要修改这里
+                os.makedirs("avatars", exist_ok=True)
+                with open(avatar_path, "wb") as f:
+                    f.write(reg_avatar.getbuffer())
+                st.success("头像上传成功！")
             if len(reg_user) < 4:
                 error_messages.append("用户名至少需要4个字符")
             if len(reg_nickname) < 2:  # 新增昵称验证
@@ -123,7 +133,7 @@ with tab2:
                     st.error(error)
             else:
                 # 修正参数，添加nickname
-                result = register_user(reg_user, reg_nickname, reg_phone, reg_pass, reg_role)
+                result = register_user(reg_user, reg_nickname, reg_phone, reg_pass, reg_role, avatar_path)
                 if result == "success":
                     st.success("注册成功！请登录")
                 elif result == "username_exists":
