@@ -7,6 +7,59 @@ import os
 import random
 import string
 import time
+import websockets
+import asyncio
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+
+
+# WebSocket消息监听
+def start_websocket_listener():
+    async def listen_messages():
+        group_id = str(st.session_state.current_group["id"])
+        uri = f"ws://127.0.0.1:6006/ws/{group_id}"
+
+        while True:
+            try:
+                async with websockets.connect(uri) as websocket:
+                    while True:
+                        message = await websocket.recv()
+                        msg_data = json.loads(message)
+                        new_msg = {
+                            "role": "user" if msg_data["type"] == "message" else "assistant",
+                            "content": f"{msg_data['username']}: {msg_data['content']}"
+                        }
+                        if new_msg not in st.session_state.history:
+                            st.session_state.history.append(new_msg)
+                            st.rerun()
+            except Exception as e:
+                print(f"连接错误: {e}")
+                await asyncio.sleep(3)  # 3秒后重试
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    task = loop.create_task(listen_messages())
+    add_script_run_ctx(task)
+
+
+# 在页面初始化时启动监听
+if "ws_started" not in st.session_state:
+    start_websocket_listener()
+    st.session_state.ws_started = True
+
+
+# 修改消息发送逻辑
+async def send_websocket_message(content):
+    group_id = str(st.session_state.current_group["id"])
+    uri = f"ws://127.0.0.1:6006/ws/{group_id}"
+    async with websockets.connect(uri) as websocket:
+        message = json.dumps({
+            "type": "message",
+            "username": st.session_state.username,
+            "content": content,
+            "group_id": group_id
+        })
+        await websocket.send(message)
+
 
 # 页面配置
 st.set_page_config(
@@ -289,6 +342,7 @@ if prompt := st.chat_input("请输入您的问题..."):
                        "assistant",
                        full_answer))
 
+
             # 更新会话历史
             st.session_state.history.extend([
                 {"role": "user", "content": f"{st.session_state.username}: {prompt}"},
@@ -302,6 +356,9 @@ if prompt := st.chat_input("请输入您的问题..."):
             )
 
         conn.commit()
+
+        # 新增WebSocket推送
+        asyncio.run(send_websocket_message(prompt))
 
     except Exception as e:
         conn.rollback()
