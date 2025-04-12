@@ -1,12 +1,48 @@
 import streamlit as st
 import sqlite3
-from passlib.hash import pbkdf2_sha256
 import re
 import os
+import time
+import requests
+
+from multiprocessing import Process
+from passlib.hash import pbkdf2_sha256
+from sqlite3 import connect
+
+
+def run_server():
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=6006)
+
+if not hasattr(st.session_state, 'server_started'):
+    server_process = Process(target=run_server, daemon=True)
+    server_process.start()
+    st.session_state.server_started = True
+
+
+with st.spinner("服务启动中，请稍候..."):
+    while True:
+        try:
+            # 尝试访问API端点验证服务是否就绪
+            response = requests.get("http://localhost:6006/chat/knowledge_base_chat", timeout=1)
+            if response.status_code == 200:
+                break
+        except (requests.ConnectionError, requests.Timeout):
+            time.sleep(0.5)
+        except Exception as e:
+            st.error(f"服务启动失败: {str(e)}")
+            break
+
+
+
+def get_db_connection():
+    return connect('users.db', check_same_thread=False)
+
+
 
 # 初始化数据库
 def init_db():
-    conn = sqlite3.connect('users.db')
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (username TEXT PRIMARY KEY, 

@@ -10,13 +10,13 @@ import time
 import websockets
 import asyncio
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-
+import uuid
 
 # WebSocket消息监听
 def start_websocket_listener():
     async def listen_messages():
         group_id = str(st.session_state.current_group["id"])
-        uri = f"ws://127.0.0.1:6006/ws/{group_id}"
+        uri = f"ws://0.0.0.0:6006/ws/{group_id}"
 
         while True:
             try:
@@ -24,17 +24,26 @@ def start_websocket_listener():
                     while True:
                         message = await websocket.recv()
                         msg_data = json.loads(message)
-                        new_msg = {
-                            "role": "user" if msg_data["type"] == "message" else "assistant",
+
+                        # 消息去重校验
+                        existing_ids = [msg.get("msg_id") for msg in st.session_state.history]
+                        if msg_data.get("msg_id") in existing_ids:
+                            continue
+
+                        # 自动滚动到底部
+                        st.session_state.history.append({
+                            "msg_id": msg_data["msg_id"],
+                            "role": "user",
                             "content": f"{msg_data['username']}: {msg_data['content']}"
-                        }
-                        if new_msg not in st.session_state.history:
-                            st.session_state.history.append(new_msg)
-                            st.rerun()
+                        })
+                        # 使用低延迟刷新
+                        st.experimental_rerun()
+
             except Exception as e:
                 print(f"连接错误: {e}")
-                await asyncio.sleep(3)  # 3秒后重试
+                await asyncio.sleep(3)
 
+    # 启动独立事件循环
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     task = loop.create_task(listen_messages())
@@ -51,14 +60,27 @@ if "ws_started" not in st.session_state:
 async def send_websocket_message(content):
     group_id = str(st.session_state.current_group["id"])
     uri = f"ws://127.0.0.1:6006/ws/{group_id}"
-    async with websockets.connect(uri) as websocket:
-        message = json.dumps({
-            "type": "message",
-            "username": st.session_state.username,
-            "content": content,
-            "group_id": group_id
-        })
-        await websocket.send(message)
+
+    # 添加重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with websockets.connect(uri) as websocket:
+                message = json.dumps({
+                    "msg_id": str(uuid.uuid4()),  # 添加唯一消息ID
+                    "type": "message",
+                    "username": st.session_state.username,
+                    "content": content,
+                    "group_id": group_id,
+                    "timestamp": datetime.now().isoformat()
+                })
+                await websocket.send(message)
+                return True
+        except Exception as e:
+            if attempt == max_retries - 1:
+                st.error(f"消息发送失败: {str(e)}")
+                return False
+            await asyncio.sleep(0.5)
 
 
 # 页面配置
@@ -82,7 +104,7 @@ st.caption("基于本地数学知识库的智能问答系统")
 
 # 在显示右侧边栏内容部分添加
 def get_user_info(username):
-    conn = sqlite3.connect('users.db')
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT nickname, role, avatar_path FROM users WHERE username = ?", (username,))
     result = c.fetchone()
@@ -92,6 +114,11 @@ def get_user_info(username):
         "role": result[1],
         "avatar": result[2]
     } if result else None
+
+from sqlite3 import connect
+
+def get_db_connection():
+    return connect('users.db', check_same_thread=False)
 
 # 数据库初始化函数（添加调用）
 def init_chat_db():

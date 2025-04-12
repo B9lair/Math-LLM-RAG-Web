@@ -33,9 +33,14 @@ def generate_unique_invite_code():
             conn.close()
             return invite_code
 
+from sqlite3 import connect
+
+def get_db_connection():
+    return connect('users.db', check_same_thread=False)
+
 # 数据库初始化函数
 def init_chat_db():
-    conn = sqlite3.connect('users.db')
+    conn = get_db_connection()
     c = conn.cursor()
 
     # 创建对话表
@@ -630,7 +635,7 @@ if prompt := st.chat_input("请输入您的问题..."):
         try:
             # 发送流式请求
             with requests.post(
-                    "http://127.0.0.1:7861/chat/knowledge_base_chat",
+                    "http://0.0.0.0:6006/chat/knowledge_base_chat",
                     json=payload,
                     stream=True
             ) as response:
