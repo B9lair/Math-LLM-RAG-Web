@@ -33,14 +33,9 @@ def generate_unique_invite_code():
             conn.close()
             return invite_code
 
-from sqlite3 import connect
-
-def get_db_connection():
-    return connect('users.db', check_same_thread=False)
-
 # 数据库初始化函数
 def init_chat_db():
-    conn = get_db_connection()
+    conn = sqlite3.connect('users.db')
     c = conn.cursor()
 
     # 创建对话表
@@ -116,7 +111,7 @@ if "current_group" in st.session_state:
     # 如果检测到残留的群聊状态
     del st.session_state.current_group
     st.session_state.history = []
-    st.experimental_rerun()
+    st.rerun()
 
 # 页面标题
 st.title("📚 智能数学学习平台")
@@ -179,7 +174,7 @@ with st.sidebar:
             # 重置当前会话
             st.session_state.current_conv = new_conv_id
             st.session_state.history = []
-            st.experimental_rerun()
+            st.rerun()
 
         # 新增删除当前对话按钮
         if st.button("删除当前对话"):
@@ -208,7 +203,7 @@ with st.sidebar:
                 finally:
                     conn.close()
 
-                st.experimental_rerun()
+                st.rerun()
 
         # 自定义带滚动条的对话历史容器
         st.markdown("""
@@ -273,7 +268,7 @@ with st.sidebar:
 
                         st.session_state.current_conv = conv_id
                         st.session_state.history = messages
-                        st.experimental_rerun()
+                        st.rerun()
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -288,7 +283,7 @@ with st.sidebar:
         with col2:
             if st.button("切换侧边栏", key="toggle_left"):
                 st.session_state.show_right_content = True
-                st.experimental_rerun()
+                st.rerun()
 
     else:
         # 显示右侧边栏内容
@@ -360,7 +355,7 @@ with st.sidebar:
                 with col2:
                     if st.form_submit_button("❌ 取消"):
                         st.session_state.show_group_form = False
-                        st.experimental_rerun()
+                        st.rerun()
 
                 if submit:
                     if len(group_name) > 20:
@@ -463,7 +458,7 @@ with st.sidebar:
                         "name": group_info[0],
                         "invite_code": group_info[1]
                     }
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error("邀请码无效")
             except sqlite3.IntegrityError:
@@ -482,7 +477,7 @@ with st.sidebar:
         with col2:
             if st.button("切换侧边栏", key="toggle_right"):
                 st.session_state.show_right_content = False
-                st.experimental_rerun()
+                st.rerun()
 
 # 添加CSS样式优化按钮间距
 st.markdown("""
@@ -635,7 +630,7 @@ if prompt := st.chat_input("请输入您的问题..."):
         try:
             # 发送流式请求
             with requests.post(
-                    "http://0.0.0.0:6006/chat/knowledge_base_chat",
+                    "http://127.0.0.1:7861/chat/knowledge_base_chat",
                     json=payload,
                     stream=True
             ) as response:

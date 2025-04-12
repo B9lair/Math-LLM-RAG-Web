@@ -16,7 +16,7 @@ import uuid
 def start_websocket_listener():
     async def listen_messages():
         group_id = str(st.session_state.current_group["id"])
-        uri = f"ws://0.0.0.0:6006/ws/{group_id}"
+        uri = f"ws://127.0.0.1:6006/ws/{group_id}"
 
         while True:
             try:
@@ -26,39 +26,44 @@ def start_websocket_listener():
                         msg_data = json.loads(message)
 
                         # 消息去重校验
-                        existing_ids = [msg.get("msg_id") for msg in st.session_state.history]
+                        existing_ids = [msg.get("msg_id") for msg in st.session_state.history if msg.get("msg_id")]
                         if msg_data.get("msg_id") in existing_ids:
                             continue
 
-                        # 自动滚动到底部
+                        # 更新历史并刷新
                         st.session_state.history.append({
                             "msg_id": msg_data["msg_id"],
                             "role": "user",
                             "content": f"{msg_data['username']}: {msg_data['content']}"
                         })
-                        # 使用低延迟刷新
-                        st.experimental_rerun()
-
+                        st.rerun()
             except Exception as e:
                 print(f"连接错误: {e}")
                 await asyncio.sleep(3)
 
-    # 启动独立事件循环
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    task = loop.create_task(listen_messages())
-    add_script_run_ctx(task)
-
+    # 创建新事件循环并绑定到当前线程
+    if "ws_task" not in st.session_state:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        st.session_state.ws_task = loop.create_task(listen_messages())
+        # 绑定任务到Streamlit上下文
+        add_script_run_ctx(st.session_state.ws_task)
 
 # 在页面初始化时启动监听
 if "ws_started" not in st.session_state:
     start_websocket_listener()
     st.session_state.ws_started = True
 
-
 # 修改消息发送逻辑
 async def send_websocket_message(content):
     group_id = str(st.session_state.current_group["id"])
+    message = json.dumps({
+        "msg_id": str(uuid.uuid4()),
+        "username": st.session_state.username,
+        "content": content,
+        "group_id": group_id,
+        "user_id": st.session_state.username
+    })
     uri = f"ws://127.0.0.1:6006/ws/{group_id}"
 
     # 添加重试机制
@@ -82,7 +87,6 @@ async def send_websocket_message(content):
                 return False
             await asyncio.sleep(0.5)
 
-
 # 页面配置
 st.set_page_config(
     page_title="智能数学学习平台",
@@ -104,7 +108,7 @@ st.caption("基于本地数学知识库的智能问答系统")
 
 # 在显示右侧边栏内容部分添加
 def get_user_info(username):
-    conn = get_db_connection()
+    conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute("SELECT nickname, role, avatar_path FROM users WHERE username = ?", (username,))
     result = c.fetchone()
@@ -115,11 +119,6 @@ def get_user_info(username):
         "avatar": result[2]
     } if result else None
 
-from sqlite3 import connect
-
-def get_db_connection():
-    return connect('users.db', check_same_thread=False)
-
 # 数据库初始化函数（添加调用）
 def init_chat_db():
     conn = sqlite3.connect('users.db')
@@ -127,19 +126,19 @@ def init_chat_db():
 
     # 群聊表
     c.execute('''CREATE TABLE IF NOT EXISTS group_chats
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  title TEXT NOT NULL,
-                  invite_code TEXT NOT NULL UNIQUE,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      title TEXT NOT NULL,
+                      invite_code TEXT NOT NULL UNIQUE,
+                      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
     # 新增群聊消息表
     c.execute('''CREATE TABLE IF NOT EXISTS group_messages
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  group_id INTEGER NOT NULL,
-                  user_id TEXT NOT NULL,
-                  content TEXT NOT NULL,
-                  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY(group_id) REFERENCES group_chats(id))''')
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      group_id INTEGER NOT NULL,
+                      user_id TEXT NOT NULL,
+                      content TEXT NOT NULL,
+                      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                      FOREIGN KEY(group_id) REFERENCES group_chats(id))''')
 
     conn.commit()
     conn.close()
@@ -147,8 +146,6 @@ def init_chat_db():
 
 # 初始化数据库（新增调用）
 init_chat_db()
-
-
 
 # 在创建群聊时生成唯一邀请码
 def generate_unique_invite_code():
@@ -164,9 +161,6 @@ def generate_unique_invite_code():
             return invite_code
 
 
-
-
-
 # 初始化群聊状态（添加路径检查）
 if "current_group" not in st.session_state:
     st.switch_page("app.py")  # 跳回首页如果直接访问
@@ -175,7 +169,7 @@ else:
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute("SELECT id FROM group_chats WHERE id = ?",
-             (st.session_state.current_group["id"],))
+              (st.session_state.current_group["id"],))
     if not c.fetchone():
         del st.session_state.current_group
         st.switch_page("pages/single_chat.py")
@@ -194,20 +188,20 @@ if st.session_state.last_group_id != st.session_state.current_group["id"]:
 
 # 加载群聊历史记录（使用群聊ID标识状态）
 current_group_id = st.session_state.current_group["id"]
-history_key = f"history_loaded_{current_group_id}"  # 在此处定义
+history_key = f"history_loaded_{current_group_id}"
 
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
 # 自动刷新逻辑
-if time.time() - st.session_state.last_refresh > 5:  # 每5秒刷新一次
+if time.time() - st.session_state.last_refresh > 2:  # 每2秒刷新一次
     st.session_state[history_key] = False
     st.session_state.last_refresh = time.time()
-    st.experimental_rerun()
+    st.rerun()
 
 conn = sqlite3.connect('users.db')
 c = conn.cursor()
-c.execute("""SELECT user_id, content FROM group_messages 
+c.execute("""SELECT user_id, content, msg_id FROM group_messages 
            WHERE group_id = ? ORDER BY timestamp""",
           (current_group_id,))
 messages = c.fetchall()
@@ -215,9 +209,12 @@ conn.close()
 
 # 直接更新历史记录，不依赖缓存
 st.session_state.history = [
-    {"role": "user", "content": f"{user}: {msg}"} for user, msg in messages
+    {
+        "msg_id": msg_id,  # 添加msg_id
+        "role": "user",
+        "content": f"{user}: {msg}"
+    } for user, msg, msg_id in messages  # 解构三元组
 ]
-
 
 # 侧边栏信息显示（保持不变）
 with st.sidebar:
@@ -291,8 +288,14 @@ with st.sidebar:
 
     # 退出群聊按钮
     if st.button("退出群聊"):
+        if "ws_task" in st.session_state:
+            st.session_state.ws_task.cancel()
+            try:
+                asyncio.get_event_loop().run_until_complete(st.session_state.ws_task)
+            except asyncio.CancelledError:
+                pass
         # 清除所有群聊相关状态
-        keys_to_remove = ["current_group", "last_group_id"]
+        keys_to_remove = ["current_group", "last_group_id", "ws_task", "ws_started"]
         for key in keys_to_remove:
             if key in st.session_state:
                 del st.session_state[key]
@@ -301,13 +304,12 @@ with st.sidebar:
         st.session_state.history = []
         st.switch_page("pages/single_chat.py")
 
-
 # 在消息展示区域前添加
 if st.button("🔄 刷新消息"):
     st.session_state[history_key] = False  # 强制重新加载历史记录
-    st.experimental_rerun()
-# 消息展示区域
+    st.rerun()  # 使用 st.rerun
 
+# 消息展示区域
 with st.container():
     for msg in st.session_state.history:
         # 使用精确前缀判断
@@ -321,12 +323,16 @@ if prompt := st.chat_input("请输入您的问题..."):
         c = conn.cursor()
         c.execute("BEGIN TRANSACTION")
 
+        # 获取 group_id 和 username
+        group_id = st.session_state.current_group["id"]
+        username = st.session_state.username
+
         # 插入用户消息（始终保存）
-        c.execute("""INSERT INTO group_messages (group_id, user_id, content)
-                   VALUES (?, ?, ?)""",
-                  (st.session_state.current_group["id"],
-                   st.session_state.username,
-                   prompt))
+        msg_id = str(uuid.uuid4())
+        c.execute("""INSERT INTO group_messages 
+                   (group_id, user_id, content, msg_id)
+                   VALUES (?, ?, ?, ?)""",
+                  (group_id, username, prompt, msg_id))
 
         # 检查是否包含特定指令
         if "@数学帮帮" in prompt:  # 修改判断条件
@@ -369,7 +375,6 @@ if prompt := st.chat_input("请输入您的问题..."):
                        "assistant",
                        full_answer))
 
-
             # 更新会话历史
             st.session_state.history.extend([
                 {"role": "user", "content": f"{st.session_state.username}: {prompt}"},
@@ -393,4 +398,4 @@ if prompt := st.chat_input("请输入您的问题..."):
     finally:
         if conn:
             conn.close()
-    st.experimental_rerun()
+    st.rerun()

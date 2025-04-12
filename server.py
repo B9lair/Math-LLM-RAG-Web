@@ -5,56 +5,7 @@ import json
 import asyncio
 import sqlite3
 
-# 修改后的server.py
-import asyncio
-from fastapi import FastAPI, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-import threading
-import sqlite3
-
-
-class FastAPIThread(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True)
-        self.app = FastAPI()
-        self.setup_routes()
-
-    def setup_routes(self):
-
-        # 修改WebSocket路由处理
-        @self.app.websocket("/ws/{group_id}")
-        async def websocket_endpoint(websocket: WebSocket, group_id: str):
-            await manager.connect(websocket, group_id)
-            try:
-                while True:
-                    data = await websocket.receive_text()
-                    # 添加消息持久化逻辑
-                    msg_data = json.loads(data)
-                    with sqlite3.connect('users.db') as conn:
-                        c = conn.cursor()
-                        c.execute("""INSERT INTO group_messages 
-                                  (group_id, user_id, content) 
-                                  VALUES (?, ?, ?)""",
-                                  (group_id,
-                                   msg_data["username"],
-                                   msg_data["content"]))
-                        conn.commit()
-                    # 广播给所有客户端
-                    await manager.broadcast(data, group_id)
-            except Exception as e:
-                manager.disconnect(websocket, group_id)
-
-        # 原有知识库接口
-        @self.app.post("/chat/knowledge_base_chat")
-        async def chat_endpoint(query: dict):
-            # 保留原有知识库处理逻辑
-            return {"answer": "示例回答", "status": 200}
-
-    def run(self):
-        import uvicorn
-        uvicorn.run(self.app, host="0.0.0.0", port=6006)
-
-
+app = FastAPI()
 
 # 允许跨域
 app.add_middleware(
@@ -90,4 +41,36 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+# WebSocket路由
+@app.websocket("/ws/{group_id}")
+async def websocket_endpoint(websocket: WebSocket, group_id: str):
+    await manager.connect(websocket, group_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            msg_data = json.loads(data)
+            user_id = msg_data.get("user_id")
+            with sqlite3.connect('users.db') as conn:
+                c = conn.cursor()
+                # 修改SQL插入语句，增加msg_id字段
+                c.execute("""INSERT INTO group_messages 
+                          (group_id, user_id, content, msg_id) 
+                          VALUES (?, ?, ?, ?)""",
+                          (group_id,
+                           msg_data["user_id"],
+                           msg_data["content"],
+                           msg_data["msg_id"]))
+                conn.commit()
+            await manager.broadcast(data, group_id)
+    except Exception as e:
+        manager.disconnect(websocket, group_id)
 
+# 原有知识库接口
+@app.post("/chat/knowledge_base_chat")
+async def chat_endpoint(query: dict):
+    # 保留原有知识库处理逻辑
+    return {"answer": "示例回答", "status": 200}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app="server:app", host="0.0.0.0", port=6006, reload=True)
